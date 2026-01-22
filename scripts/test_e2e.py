@@ -5,11 +5,33 @@ Tests all services, endpoints, and Kafka pipeline flow.
 """
 import json
 import time
-import requests
-from typing import Dict, Any
+import urllib.error
+import urllib.request
+from typing import Dict, Any, Optional, Tuple
 
 BASE_URL = "http://localhost:8000"
 IDENTITY_URL = "http://localhost:8001"
+
+
+def _request_json(
+    method: str,
+    url: str,
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: int = 10,
+) -> Tuple[int, str]:
+    """Send an HTTP request with optional JSON body and return status + body."""
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8")
+            return response.status, body
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8")
 
 
 def test_health_checks():
@@ -23,8 +45,8 @@ def test_health_checks():
     results = {}
     for name, url in services.items():
         try:
-            resp = requests.get(url, timeout=5)
-            status = "✅ PASS" if resp.status_code == 200 else f"❌ FAIL ({resp.status_code})"
+            status_code, _ = _request_json("GET", url, timeout=5)
+            status = "✅ PASS" if status_code == 200 else f"❌ FAIL ({status_code})"
             results[name] = status
             print(f"{name:15} {status}")
         except Exception as e:
@@ -49,13 +71,18 @@ def test_identity_creation():
     }
     
     try:
-        resp = requests.post(f"{IDENTITY_URL}/v1/identities", json=payload, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
+        status_code, body = _request_json(
+            "POST",
+            f"{IDENTITY_URL}/v1/identities",
+            payload=payload,
+            timeout=10,
+        )
+        if status_code == 200:
+            data = json.loads(body)
             print(f"✅ Identity created: {data.get('id')} - {data.get('display_name')}")
-            return data.get('id')
+            return data.get("id")
         else:
-            print(f"❌ Failed: {resp.status_code} - {resp.text}")
+            print(f"❌ Failed: {status_code} - {body}")
             return None
     except Exception as e:
         print(f"❌ ERROR: {e}")
@@ -73,13 +100,18 @@ def test_media_submission(identity_id: str = None):
     }
     
     try:
-        resp = requests.post(f"{BASE_URL}/v1/media/submit", json=payload, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
+        status_code, body = _request_json(
+            "POST",
+            f"{BASE_URL}/v1/media/submit",
+            payload=payload,
+            timeout=10,
+        )
+        if status_code == 200:
+            data = json.loads(body)
             print(f"✅ Media submitted: {data}")
             return True
         else:
-            print(f"❌ Failed: {resp.status_code} - {resp.text}")
+            print(f"❌ Failed: {status_code} - {body}")
             return False
     except Exception as e:
         print(f"❌ ERROR: {e}")
@@ -97,14 +129,19 @@ def test_high_confidence_submission():
     }
     
     try:
-        resp = requests.post(f"{BASE_URL}/v1/media/submit", json=payload, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
+        status_code, body = _request_json(
+            "POST",
+            f"{BASE_URL}/v1/media/submit",
+            payload=payload,
+            timeout=10,
+        )
+        if status_code == 200:
+            data = json.loads(body)
             print(f"✅ High-confidence media submitted: {data}")
             print("   Check alerts service logs for '[ALERT]' message")
             return True
         else:
-            print(f"❌ Failed: {resp.status_code} - {resp.text}")
+            print(f"❌ Failed: {status_code} - {body}")
             return False
     except Exception as e:
         print(f"❌ ERROR: {e}")
@@ -123,11 +160,16 @@ def test_error_cases():
     
     for name, payload in test_cases:
         try:
-            resp = requests.post(f"{BASE_URL}/v1/media/submit", json=payload, timeout=5)
-            if resp.status_code in [400, 422]:
-                print(f"✅ {name}: Correctly rejected ({resp.status_code})")
+            status_code, _ = _request_json(
+                "POST",
+                f"{BASE_URL}/v1/media/submit",
+                payload=payload,
+                timeout=5,
+            )
+            if status_code in [400, 422]:
+                print(f"✅ {name}: Correctly rejected ({status_code})")
             else:
-                print(f"⚠️  {name}: Unexpected status {resp.status_code}")
+                print(f"⚠️  {name}: Unexpected status {status_code}")
         except Exception as e:
             print(f"❌ {name}: ERROR - {e}")
 
