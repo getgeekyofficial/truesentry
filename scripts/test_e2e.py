@@ -46,6 +46,16 @@ def _parse_json(body: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
+def _request_json_data(
+    method: str,
+    url: str,
+    payload: Optional[Dict[str, Any]] = None,
+    timeout: int = 10,
+) -> Tuple[int, Optional[Dict[str, Any]], str]:
+    status_code, body = _request_json(method, url, payload=payload, timeout=timeout)
+    return status_code, _parse_json(body), body
+
+
 def test_health_checks():
     """Test all service health endpoints."""
     print("\n=== Testing Health Endpoints ===")
@@ -83,14 +93,13 @@ def test_identity_creation():
     }
     
     try:
-        status_code, body = _request_json(
+        status_code, data, body = _request_json_data(
             "POST",
             f"{IDENTITY_URL}/v1/identities",
             payload=payload,
             timeout=10,
         )
         if status_code == 200:
-            data = _parse_json(body)
             if not data:
                 print(f"❌ Failed: 200 - invalid JSON response: {body}")
                 return None
@@ -115,14 +124,13 @@ def test_media_submission(identity_id: str = None):
     }
     
     try:
-        status_code, body = _request_json(
+        status_code, data, body = _request_json_data(
             "POST",
             f"{BASE_URL}/v1/media/submit",
             payload=payload,
             timeout=10,
         )
         if status_code == 200:
-            data = _parse_json(body)
             if not data:
                 print(f"❌ Failed: 200 - invalid JSON response: {body}")
                 return False
@@ -147,14 +155,13 @@ def test_high_confidence_submission():
     }
     
     try:
-        status_code, body = _request_json(
+        status_code, data, body = _request_json_data(
             "POST",
             f"{BASE_URL}/v1/media/submit",
             payload=payload,
             timeout=10,
         )
         if status_code == 200:
-            data = _parse_json(body)
             if not data:
                 print(f"❌ Failed: 200 - invalid JSON response: {body}")
                 return False
