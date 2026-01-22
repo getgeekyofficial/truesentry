@@ -1,0 +1,246 @@
+
+name: id-protect
+
+networks:
+  idprotect:
+    driver: bridge
+
+volumes:
+  postgres_data: {}
+  minio_data: {}
+  mlflow_data: {}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: idprotect-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: idprotect
+      POSTGRES_USER: idprotect
+      POSTGRES_PASSWORD: idprotect_password
+    command: ["postgres", "-c", "shared_preload_libraries=vector"]
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idprotect -d idprotect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    networks:
+      - idprotect
+
+  kafka:
+    image: docker.redpanda.com/redpandadata/redpanda:latest
+    container_name: idprotect-kafka
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp
+      - "1"
+      - --memory
+      - 1G
+      - --reserve-memory
+      - 0M
+      - --node-id
+      - "0"
+      - --check=false
+      - --kafka-addr
+      - internal://0.0.0.0:9092,external://0.0.0.0:9094
+      - --advertise-kafka-addr
+      - internal://kafka:9092,external://127.0.0.1:9094
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info --brokers localhost:9092 > /dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - idprotect
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: idprotect-kafka-ui
+    restart: unless-stopped
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "local"
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:9092"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafka
+    networks:
+      - idprotect
+
+  minio:
+    image: minio/minio:latest
+    container_name: idprotect-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: idprotect
+      MINIO_ROOT_PASSWORD: idprotect_secret
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - idprotect
+
+  # mlflow:
+  #   image: ghcr.io/mlflow/mlflow:v2.10.2
+  #   container_name: idprotect-mlflow
+  #   restart: unless-stopped
+  #   environment:
+  #     MLFLOW_HOST: "0.0.0.0"
+  #     MLFLOW_PORT_NUMBER: "5000"
+  #     MLFLOW_DEFAULT_ARTIFACT_ROOT: "s3://mlflow/"
+  #     AWS_ACCESS_KEY_ID: "idprotect"
+  #     AWS_SECRET_ACCESS_KEY: "idprotect_secret"
+  #     MLFLOW_S3_ENDPOINT_URL: "http://minio:9000"
+  #   command:
+  #     - /bin/sh
+  #     - -c
+  #     - |
+  #       mlflow server \
+  #         --host 0.0.0.0 \
+  #         --port 5000 \
+  #         --backend-store-uri sqlite:///mlflow.db \
+  #         --default-artifact-root s3://mlflow/
+  #   volumes:
+  #     - mlflow_data:/app
+  #   ports:
+  #     - "5000:5000"
+  #   depends_on:
+  #     - minio
+  #   networks:
+  #     - idprotect
+
+  # Application services (disabled by default via profiles)
+  gateway:
+    build:
+      context: ../services/gateway
+    container_name: idprotect-gateway
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    environment:
+      DB_URL: postgresql+psycopg://idprotect:idprotect_password@postgres:5432/idprotect
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: idprotect
+      S3_SECRET_KEY: idprotect_secret
+      S3_BUCKET: idprotect
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - kafka
+      - minio
+    profiles: ["app"]
+    networks:
+      - idprotect
+
+  identity:
+    build:
+      context: ../services/identity
+    container_name: idprotect-identity
+    restart: unless-stopped
+    environment:
+      DB_URL: postgresql+psycopg://idprotect:idprotect_password@postgres:5432/idprotect
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: idprotect
+      S3_SECRET_KEY: idprotect_secret
+      S3_BUCKET: idprotect
+    depends_on:
+      - postgres
+      - kafka
+      - minio
+    profiles: ["app"]
+    networks:
+      - idprotect
+
+  ingestion:
+    build:
+      context: ../services/ingestion
+    container_name: idprotect-ingestion
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: idprotect
+      S3_SECRET_KEY: idprotect_secret
+      S3_BUCKET: idprotect
+    depends_on:
+      - kafka
+      - minio
+    profiles: ["app"]
+    networks:
+      - idprotect
+
+  forensics:
+    build:
+      context: ../services/forensics
+    container_name: idprotect-forensics
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: idprotect
+      S3_SECRET_KEY: idprotect_secret
+      S3_BUCKET: idprotect
+      TORCH_CUDA_ARCH_LIST: "8.6"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+              count: "all"
+    depends_on:
+      - kafka
+      - minio
+    profiles: ["app"]
+    networks:
+      - idprotect
+
+  ensemble:
+    build:
+      context: ../services/ensemble
+    container_name: idprotect-ensemble
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      - kafka
+    profiles: ["app"]
+    networks:
+      - idprotect
+
+  alerts:
+    build:
+      context: ../services/alerts
+    container_name: idprotect-alerts
+    restart: unless-stopped
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SENDGRID_API_KEY: ""
+      TWILIO_ACCOUNT_SID: ""
+      TWILIO_AUTH_TOKEN: ""
+    depends_on:
+      - kafka
+    profiles: ["app"]
+    networks:
+      - idprotect

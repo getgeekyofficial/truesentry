@@ -1,0 +1,9 @@
+{
+  "display_name": "Alice",
+  "handles": {},
+  "consent": {
+    "terms_version": "v1",
+    "signature": "sig"
+  },
+  "reference_media": []
+}
