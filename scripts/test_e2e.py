@@ -7,7 +7,7 @@ import json
 import time
 import urllib.error
 import urllib.request
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 BASE_URL = "http://localhost:8000"
 IDENTITY_URL = "http://localhost:8001"
@@ -21,7 +21,7 @@ def _request_json(
 ) -> Tuple[int, str]:
     """Send an HTTP request with optional JSON body and return status + body."""
     data = None
-    headers = {}
+    headers = {"Accept": "application/json"}
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         headers["Content-Type"] = "application/json"
@@ -32,6 +32,18 @@ def _request_json(
             return response.status, body
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Request failed: {exc.reason}") from exc
+
+
+def _parse_json(body: str) -> Optional[Dict[str, Any]]:
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def test_health_checks():
@@ -78,7 +90,10 @@ def test_identity_creation():
             timeout=10,
         )
         if status_code == 200:
-            data = json.loads(body)
+            data = _parse_json(body)
+            if not data:
+                print(f"❌ Failed: 200 - invalid JSON response: {body}")
+                return None
             print(f"✅ Identity created: {data.get('id')} - {data.get('display_name')}")
             return data.get("id")
         else:
@@ -107,7 +122,10 @@ def test_media_submission(identity_id: str = None):
             timeout=10,
         )
         if status_code == 200:
-            data = json.loads(body)
+            data = _parse_json(body)
+            if not data:
+                print(f"❌ Failed: 200 - invalid JSON response: {body}")
+                return False
             print(f"✅ Media submitted: {data}")
             return True
         else:
@@ -136,7 +154,10 @@ def test_high_confidence_submission():
             timeout=10,
         )
         if status_code == 200:
-            data = json.loads(body)
+            data = _parse_json(body)
+            if not data:
+                print(f"❌ Failed: 200 - invalid JSON response: {body}")
+                return False
             print(f"✅ High-confidence media submitted: {data}")
             print("   Check alerts service logs for '[ALERT]' message")
             return True
